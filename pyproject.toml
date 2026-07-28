@@ -3,6 +3,9 @@ name = "beauty-navigator-scraper"
 version = "0.1.0"
 description = "Парсер косметики для Beauty Navigator (WB, Ozon, ЗЯ)"
 authors = []
+# Имя проекта (beauty-navigator-scraper) не совпадает с именем пакета (scraper),
+# поэтому каталог указываем явно — иначе poetry install не находит, что ставить.
+packages = [{ include = "scraper" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -11,6 +14,14 @@ selectolax = "^0.3"
 pydantic = "^2.0"
 tenacity = "^8.0"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+pytest-asyncio = "^0.23"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
