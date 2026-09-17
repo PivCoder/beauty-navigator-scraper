@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from scraper.models.product import ScrapedProduct
+from scraper.normalizer import category_map
 from scraper.normalizer.category_map import lookup
 from scraper.normalizer.inci_map import extract_actives
 from scraper.normalizer.normalizer import normalize
@@ -43,6 +44,54 @@ class TestCategoryMap:
 
     def test_empty_returns_none(self) -> None:
         assert lookup("") is None
+
+
+class TestCategoryMapPartialMatch:
+    """Неточное совпадение: выигрывает самый длинный ключ, порядок слов не важен.
+
+    Русскоязычные источники отдают свободные фразы и попадают именно сюда,
+    а неверный product_type не уходит в карантин — карточка молча приезжает
+    в каталог с чужой категорией.
+    """
+
+    def test_longest_key_wins_over_generic(self) -> None:
+        # "гидрофильное масло" (cleanser) длиннее, чем "масло" и "масло для лица"
+        assert lookup("Гидрофильное масло для лица") == "cleanser"
+
+    def test_generic_key_still_matches_when_alone(self) -> None:
+        # обратная сторона: без уточнения "масло для лица" остаётся уходом
+        assert lookup("Масло для лица питательное") == "skincare_active"
+
+    def test_reversed_word_order(self) -> None:
+        # в рознице порядок слов произвольный: "крем тональный" = "тональный крем"
+        assert lookup("Крем тональный") == "base"
+
+    def test_reversed_word_order_with_extra_words(self) -> None:
+        assert lookup("Крем тональный для сухой кожи, 30 мл") == "base"
+
+    def test_sunscreen_not_swallowed_by_cream(self) -> None:
+        assert lookup("Солнцезащитный крем SPF 50") == "skincare_active"
+
+    def test_cleansing_gel_not_swallowed_by_gel_cream(self) -> None:
+        assert lookup("Гель для умывания с AHA") == "cleanser"
+
+    def test_makeup_remover_milk(self) -> None:
+        assert lookup("Молочко для снятия макияжа мягкое") == "cleanser"
+
+    def test_single_word_key_needs_substring_not_tokens(self) -> None:
+        # однословные ключи ищутся подстрокой; слова из разных ключей
+        # не должны складываться в ложное совпадение
+        assert lookup("dental-floss") is None
+
+    def test_order_of_declaration_does_not_matter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # страховка на рост словаря: обобщённый ключ объявлен ПЕРВЫМ,
+        # уточняющий — последним, выиграть должен уточняющий
+        monkeypatch.setattr(
+            category_map,
+            "_ALL",
+            {"крем": "skincare_active", "тональный крем": "base"},
+        )
+        assert lookup("крем тональный увлажняющий") == "base"
 
 
 # ---------------------------------------------------------------------------

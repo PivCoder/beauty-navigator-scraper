@@ -2,9 +2,16 @@
 
 Ключи — нижний регистр, без лишних пробелов.
 Значения — строковые литералы ProductType (не импортируем Enum чтобы не тащить зависимость).
+
+Порядок объявления ключей на результат НЕ влияет: при неточном совпадении
+`lookup` выбирает самый длинный подошедший ключ (см. комментарий там же).
+Пополнять карту можно в любом месте — уточняющий ключ всегда перебьёт
+обобщённый.
 """
 
 from __future__ import annotations
+
+import re
 
 # ---------------------------------------------------------------------------
 # Open Beauty Facts (OBF) — теги из поля categories_tags / category_properties
@@ -160,6 +167,31 @@ _WB: dict[str, str] = {
 _ALL: dict[str, str] = {**_OBF, **_WB}
 
 
+_WORD_RE = re.compile(r"[a-zа-яё0-9]+")
+
+
+def _tokens(text: str) -> list[str]:
+    """Слова строки в нижнем регистре: дефисы и пробелы — одинаковые разделители."""
+    return _WORD_RE.findall(text)
+
+
+def _matches(pattern: str, key: str, key_tokens: frozenset[str]) -> bool:
+    """Подходит ли ключ карты `pattern` под входную категорию `key`.
+
+    Сначала обычное вхождение подстрокой (как было), затем — только для
+    многословных ключей — совпадение по словам в любом порядке: в рознице
+    "крем тональный" встречается не реже, чем "тональный крем".
+    Для однословных ключей подстроки достаточно, а проверка по словам ничего
+    не добавила бы, кроме ложных срабатываний.
+    """
+    if pattern in key:
+        return True
+    pattern_tokens = _tokens(pattern)
+    if len(pattern_tokens) < 2:
+        return False
+    return all(token in key_tokens for token in pattern_tokens)
+
+
 def lookup(raw_category: str) -> str | None:
     """Возвращает ProductType-строку или None если категория неизвестна."""
     key = raw_category.lower().strip()
@@ -171,8 +203,17 @@ def lookup(raw_category: str) -> str | None:
         key = key.split(":", 1)[1]
         if key in _ALL:
             return _ALL[key]
-    # Частичное совпадение — берём первый подходящий ключ
+    # Частичное совпадение — берём САМЫЙ ДЛИННЫЙ подходящий ключ, а не первый
+    # попавшийся. Обобщённые ключи ("крем", "масло") объявлены раньше
+    # уточняющих ("солнцезащитный крем", "гидрофильное масло"), и выбор по
+    # порядку словаря отдавал их: "гидрофильное масло для лица" уезжало в
+    # skincare_active вместо cleanser. Длина ключа = его специфичность,
+    # поэтому результат не зависит от порядка объявления и не поедет при
+    # пополнении карты. При равной длине выигрывает объявленный первым.
+    key_tokens = frozenset(_tokens(key))
+    best: str | None = None
+    best_len = 0
     for pattern, product_type in _ALL.items():
-        if pattern in key:
-            return product_type
-    return None
+        if len(pattern) > best_len and _matches(pattern, key, key_tokens):
+            best, best_len = product_type, len(pattern)
+    return best
