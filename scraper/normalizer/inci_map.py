@@ -11,6 +11,8 @@ INCI (International Nomenclature of Cosmetic Ingredients) — междунаро
 
 from __future__ import annotations
 
+import re
+
 # INCI-имя (нижний регистр) → наш active.code
 INCI_TO_CODE: dict[str, str] = {
     # ── Витамин C ──────────────────────────────────────────────────────────
@@ -115,14 +117,92 @@ INCI_TO_CODE: dict[str, str] = {
 }
 
 
-def extract_actives(ingredients_text: str) -> list[str]:
-    """Парсит INCI-строку ингредиентов, возвращает дедуплицированные коды активов."""
+# ── Аллергены отдушек, декларируемые по Регламенту ЕС 1223/2009 (Приложение III) ──
+# Эти 26 веществ производитель обязан указывать в составе отдельно — именно потому,
+# что они вызывают контактную аллергию. Для продукта, который проверяет аллергены,
+# они важнее списка активов: в реальных составах OBF linalool встретился 406 раз,
+# limonene — 395, и ни один из них словарь не знал.
+# Коды намеренно раздельные: аллергия на лимонен не означает аллергию на линалоол.
+INCI_TO_CODE.update({
+    "amyl cinnamal": "amyl_cinnamal",
+    "amylcinnamyl alcohol": "amylcinnamyl_alcohol",
+    "anise alcohol": "anise_alcohol",
+    "benzyl alcohol": "benzyl_alcohol",
+    "benzyl benzoate": "benzyl_benzoate",
+    "benzyl cinnamate": "benzyl_cinnamate",
+    "benzyl salicylate": "benzyl_salicylate",
+    "butylphenyl methylpropional": "butylphenyl_methylpropional",  # Lilial
+    "lilial": "butylphenyl_methylpropional",
+    "cinnamal": "cinnamal",
+    "cinnamyl alcohol": "cinnamyl_alcohol",
+    "citral": "citral",
+    "citronellol": "citronellol",
+    "coumarin": "coumarin",
+    "eugenol": "eugenol",
+    "farnesol": "farnesol",
+    "geraniol": "geraniol",
+    "hexyl cinnamal": "hexyl_cinnamal",
+    "hydroxycitronellal": "hydroxycitronellal",
+    "hydroxyisohexyl 3-cyclohexene carboxaldehyde": "hicc",
+    "lyral": "hicc",
+    "isoeugenol": "isoeugenol",
+    "limonene": "limonene",
+    "d-limonene": "limonene",
+    "linalool": "linalool",
+    "methyl 2-octynoate": "methyl_2_octynoate",
+    "alpha-isomethyl ionone": "alpha_isomethyl_ionone",
+    "evernia prunastri extract": "oakmoss",
+    "evernia prunastri": "oakmoss",
+    "evernia furfuracea extract": "treemoss",
+    "evernia furfuracea": "treemoss",
+})
+
+# Коды аллергенов отдушек — отдельно, чтобы отличать их от активов:
+# активы участвуют в правилах конфликтов, аллергены — только в проверке аллергии.
+FRAGRANCE_ALLERGEN_CODES: frozenset[str] = frozenset({
+    "amyl_cinnamal", "amylcinnamyl_alcohol", "anise_alcohol", "benzyl_alcohol",
+    "benzyl_benzoate", "benzyl_cinnamate", "benzyl_salicylate",
+    "butylphenyl_methylpropional", "cinnamal", "cinnamyl_alcohol", "citral",
+    "citronellol", "coumarin", "eugenol", "farnesol", "geraniol", "hexyl_cinnamal",
+    "hydroxycitronellal", "hicc", "isoeugenol", "limonene", "linalool",
+    "methyl_2_octynoate", "alpha_isomethyl_ionone", "oakmoss", "treemoss",
+})
+
+
+def split_ingredients(ingredients_text: str) -> list[str]:
+    """Режет INCI-строку на отдельные ингредиенты и приводит их к виду словаря.
+
+    Живые составы устроены грязнее, чем «через запятую»:
+      - скобки с индексом красителя: "Titanium Dioxide (CI 77891)";
+      - регистр гуляет вплоть до полностью заглавного (Topface);
+      - разделителем бывает перевод строки или несколько пробелов (FRENCHI);
+      - у многосекционных товаров составов несколько подряд, иногда с маркерами
+        плиток "[a-1]", иногда без них вовсе;
+      - хвост "может содержать" / "+/-" перечисляет красители всех оттенков линейки.
+    """
     if not ingredients_text:
         return []
-    tokens = [t.strip().lower().rstrip(".") for t in ingredients_text.split(",")]
+
+    text = ingredients_text.lower()
+    # Хвост возможных красителей — это не состав конкретного товара.
+    text = re.split(r"может содержать|may contain|\+/-|\+\s*/\s*-", text)[0]
+    text = re.sub(r"\[[a-z]?-?\d+\]", " ", text)   # маркеры плиток палетки
+    text = re.sub(r"\([^)]*\)", " ", text)          # скобки: (CI 77891), (Water)
+
+    parts = re.split(r"[,;\n\u2022]+|\s{2,}", text)
+    out: list[str] = []
+    for part in parts:
+        token = re.sub(r"\s+", " ", part).strip(" .*[]•-")
+        if 2 < len(token) < 60:
+            out.append(token)
+    return out
+
+
+def extract_actives(ingredients_text: str) -> list[str]:
+    """Парсит INCI-строку ингредиентов, возвращает дедуплицированные коды активов."""
     seen: set[str] = set()
     result: list[str] = []
-    for token in tokens:
+    for token in split_ingredients(ingredients_text):
         code = INCI_TO_CODE.get(token)
         if code and code not in seen:
             seen.add(code)
